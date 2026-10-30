@@ -1,8 +1,12 @@
 node_modules/
 dist/
+client/dist/
+server/dist/
 .env
 .env.*
 !.env.example
+*.tsbuildinfo
 coverage/
 .DS_Store
 .npm-cache/
+.vercel

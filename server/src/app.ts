@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -32,5 +35,16 @@ app.post('/api/cases/:id/clues/:clueId/discover',gameLimit,async(req,res,next)=>
 app.post('/api/cases/:id/hints',gameLimit,async(req,res,next)=>{try{const doc=await MysteryModel.findById(req.params.id).select('+hints');assertOwner(req,doc);if(doc.status==='completed')throw Object.assign(new Error('This case is already complete.'),{status:409,code:'CASE_ALREADY_COMPLETED'});const available=counts[doc.difficulty as Difficulty].hints;if(doc.hintsUsed>=available)throw Object.assign(new Error('No hints remain for this case.'),{status:409,code:'NO_HINTS_REMAINING'});const used=doc.hintsUsed;const hint=doc.hints[used];const updated=await MysteryModel.findOneAndUpdate({_id:doc._id,ownerSession:(req as SessionRequest).sessionId,status:'active',hintsUsed:used},{$inc:{hintsUsed:1}},{new:true}).select('+hints');if(!updated)throw Object.assign(new Error('The case changed. Refresh and try again.'),{status:409,code:'CASE_ALREADY_COMPLETED'});res.json({success:true,data:{hint,mystery:publicCase(updated)}});}catch(e){next(e)}});
 app.post('/api/cases/:id/accuse',gameLimit,async(req,res,next)=>{try{const body=z.object({suspectId:z.string().min(1)}).parse(req.body);const doc=await MysteryModel.findById(req.params.id).select('+solution');assertOwner(req,doc);if(doc.status==='completed')throw Object.assign(new Error('An accusation has already been submitted.'),{status:409,code:'CASE_ALREADY_COMPLETED'});const accusation=doc.suspects.find((x:any)=>x.id===body.suspectId);if(!accusation)throw Object.assign(new Error('Select a suspect from this case.'),{status:400,code:'INVALID_SUSPECT'});const correct=body.suspectId===doc.solution.culpritId;const {score,breakdown}=calculateScore(doc.difficulty as Difficulty,correct,doc.discoveredClueIds.length,doc.hintsUsed);const saved=await MysteryModel.updateOne({_id:doc._id,ownerSession:(req as SessionRequest).sessionId,status:'active'},{$set:{status:'completed',accusation:body.suspectId,score,scoreBreakdown:breakdown}});if(!saved.modifiedCount)throw Object.assign(new Error('An accusation has already been submitted.'),{status:409,code:'CASE_ALREADY_COMPLETED'});const culprit=doc.suspects.find((x:any)=>x.id===doc.solution.culpritId);res.json({success:true,data:{correct,culprit:{id:culprit.id,name:culprit.name,role:culprit.role,age:culprit.age,description:culprit.description,motive:culprit.motive,avatar:culprit.avatar},accusation:{id:accusation.id,name:accusation.name,role:accusation.role,age:accusation.age,description:accusation.description,motive:accusation.motive,avatar:accusation.avatar},explanation:doc.solution.explanation,motive:doc.solution.motive,method:doc.solution.method,timeline:doc.solution.timeline,score,breakdown}});}catch(e){next(e)}});
 app.get('/api/cases/:id/result',gameLimit,async(req,res,next)=>{try{const doc=await MysteryModel.findById(req.params.id).select('+solution');assertOwner(req,doc);if(doc.status!=='completed')throw Object.assign(new Error('Submit your final accusation before viewing the result.'),{status:409,code:'CASE_NOT_READY'});const accusation=doc.suspects.find((x:any)=>x.id===doc.accusation);const culprit=doc.suspects.find((x:any)=>x.id===doc.solution.culpritId);const correct=doc.accusation===doc.solution.culpritId;const breakdown=doc.scoreBreakdown??calculateScore(doc.difficulty as Difficulty,correct,doc.discoveredClueIds.length,doc.hintsUsed).breakdown;res.json({success:true,data:{correct,culprit,accusation,explanation:doc.solution.explanation,motive:doc.solution.motive,method:doc.solution.method,timeline:doc.solution.timeline,score:doc.score,breakdown}});}catch(e){next(e)}});
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const clientDist = path.resolve(__dirname, '../../client/dist');
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api')) return next();
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
+
 app.use('/api',(req,res)=>res.status(404).json({success:false,error:{code:'NOT_FOUND',message:`No API route for ${req.method} ${req.path}.`}}));
 app.use((err:any,_req:Request,res:Response,_next:NextFunction)=>{const status=err.status??(err.name==='ZodError'?400:err.name==='CastError'?404:500);const code=err.code??(err.name==='ZodError'?'VALIDATION_ERROR':err.name==='CastError'?'NOT_FOUND':'INTERNAL_ERROR');const message=status>=500&&code==='INTERNAL_ERROR'?'Something went wrong while handling this case.':err.name==='CastError'?'Case not found.':err.message;res.status(status).json({success:false,error:{code,message}});});
